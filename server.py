@@ -790,23 +790,38 @@ async def stream_update(
     }
 
     # Find the active session for this source+project
+    # Timeline: chat() returns → AI works (calls stream_update) → AI calls chat() again
+    # During AI work, session is "idle" with _listener=False, so we match broadly
     session = None
     with _lock:
+        # Priority 1: exact source+project match (most recent)
+        candidates = []
         for s in _sessions.values():
-            if s["source"] == source and s["project"] == project and s.get("_listener"):
-                session = s
-                break
-        # Fallback: find any session that is waiting_for_ai
-        if not session:
-            for s in _sessions.values():
-                if s["phase"] in ("waiting_for_ai", "idle") and s.get("_listener"):
-                    session = s
-                    break
+            if source and s["source"] == source and project and s["project"] == project:
+                candidates.append(s)
+        if candidates:
+            session = max(candidates, key=lambda s: s["updated"])
+        # Priority 2: match by source only
+        if not session and source:
+            candidates = [s for s in _sessions.values() if s["source"] == source]
+            if candidates:
+                session = max(candidates, key=lambda s: s["updated"])
+        # Priority 3: most recently updated session
+        if not session and _sessions:
+            session = max(_sessions.values(), key=lambda s: s["updated"])
 
     if session:
         session["pending_updates"].append(update_entry)
         session["updated"] = time.time()
+        # Set phase to waiting_for_ai so frontend shows thinking indicator
+        if session["phase"] == "idle":
+            session["phase"] = "waiting_for_ai"
+        print(f"[stream_update] sid={session['sid']} status={status} summary={summary} phase={session['phase']} ws_clients={len(_ws_clients)}", file=sys.stderr)
         _broadcast_state(session["sid"])
+        # Also broadcast sessions list so frontend can auto-join this session
+        _broadcast_sessions()
+    else:
+        print(f"[stream_update] NO SESSION FOUND source={source!r} project={project!r} sessions={list(_sessions.keys())}", file=sys.stderr)
 
     return "ok"
 

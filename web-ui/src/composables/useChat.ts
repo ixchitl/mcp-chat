@@ -130,6 +130,15 @@ export function useChat() {
       return
     }
 
+    // Re-join current session if phase changed to waiting_for_ai
+    // This ensures we receive stream_update broadcasts via _broadcast_state
+    if (sid.value) {
+      const cur = data.sessions.find(s => s.sid === sid.value)
+      if (cur && cur.phase === 'waiting_for_ai' && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'join', sid: sid.value }))
+      }
+    }
+
     // 不再自动跳转到新会话，用户手动切换
     updateTitle()
   }

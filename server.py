@@ -845,12 +845,13 @@ async def chat(
         f"chat() called: model={model!r}, source={source!r}, project={project!r}"
     )
 
-    # Try to reuse an existing idle session from the same source+project
+    # Try to reuse an existing idle/waiting_for_ai session from the same source+project
+    # Note: stream_update() may have set phase to "waiting_for_ai" before chat() is called
     session = None
     with _lock:
         for s in _sessions.values():
             if (
-                s["phase"] == "idle"
+                s["phase"] in ("idle", "waiting_for_ai")
                 and s["source"] == source
                 and s["project"] == project
             ):

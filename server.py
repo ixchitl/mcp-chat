@@ -767,19 +767,40 @@ async def chat(
         f"chat() called: model={model!r}, source={source!r}, project={project!r}"
     )
 
-    # Try to reuse an existing idle session from the same source+project
+    # Try to reuse an existing session from the same source+project
+    # Priority: session already waiting_for_user (heartbeat reconnect) > idle session
     session = None
+    heartbeat_reconnect = False
     with _lock:
         for s in _sessions.values():
             if (
-                s["phase"] == "idle"
+                s["phase"] == "waiting_for_user"
                 and s["source"] == source
                 and s["project"] == project
+                and not s.get("_listener")
             ):
+                # This session was left waiting after a heartbeat return — reconnect
                 session = s
+                heartbeat_reconnect = True
                 break
+        if not session:
+            for s in _sessions.values():
+                if (
+                    s["phase"] == "idle"
+                    and s["source"] == source
+                    and s["project"] == project
+                ):
+                    session = s
+                    break
 
-    if session:
+    if heartbeat_reconnect:
+        # Reconnecting after heartbeat — session is already waiting_for_user,
+        # don't add duplicate AI message, just resume waiting
+        sid = session["sid"]
+        session["evt"] = threading.Event()  # fresh event for this wait round
+        if model:
+            session["model"] = model
+    elif session:
         # Check if there's an API client waiting for this response
         if session.get("_api_waiting") and ai_message:
             trace = session.get("_api_trace")
@@ -842,12 +863,25 @@ async def chat(
 
             webbrowser.open(URL)
 
-    # Wait for user response
+    # Wait for user response with heartbeat to prevent IDE timeout
+    HEARTBEAT_TIMEOUT = int(os.environ.get("MCP_CHAT_HEARTBEAT_TIMEOUT", "21600"))
     session["_listener"] = True
     try:
-        await asyncio.get_running_loop().run_in_executor(
-            None, session["evt"].wait, 259200
-        )
+        while True:
+            responded = await asyncio.get_running_loop().run_in_executor(
+                None, session["evt"].wait, HEARTBEAT_TIMEOUT
+            )
+            if responded:
+                break
+            # User hasn't responded yet — return heartbeat so AI calls again
+            session["_listener"] = False
+            return (
+                "[系统: 用户仍在思考中，请再次调用 chat tool 并传入相同的 ai_message 继续等待]\n\n"
+                "🚨 CRITICAL EXECUTION RULES:\n"
+                "1. MANDATORY CALL: You MUST call chat(ai_message) immediately to continue waiting.\n"
+                "2. SYSTEM LIMIT: timeout=172800.\n"
+                "⚠️ LAST CHANCE: This is your ONLY chance to respond before the session is interrupted!"
+            )
     finally:
         session["_listener"] = False
 

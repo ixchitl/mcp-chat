@@ -37,12 +37,26 @@ function load(): Settings {
   }
 }
 
+function applyTheme(theme: 'dark' | 'light') {
+  const root = document.documentElement
+  root.classList.remove('theme-dark', 'theme-light')
+  root.classList.add(`theme-${theme}`)
+}
+
 export function useSettings() {
   const settings = reactive<Settings>(load())
 
+  // Apply theme on init
+  applyTheme(settings.theme)
+
   watch(settings, (v) => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(v))
+    applyTheme(v.theme)
   }, { deep: true })
 
-  return { settings }
+  function toggleTheme() {
+    settings.theme = settings.theme === 'dark' ? 'light' : 'dark'
+  }
+
+  return { settings, toggleTheme }
 }

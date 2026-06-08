@@ -15,7 +15,7 @@ const activeTab = ref('workspace')
 const sidebarOpen = ref(true)
 const appMode = ref<'chat' | 'code' | 'vault'>('chat')
 const { aiMsg, phase, sending, connected, sid, sessions, activeSid, wsLatency, submitError, unreadSids, submit, switchSession, deleteSession, deleteProject } = useChat()
-const { settings } = useSettings()
+const { settings, toggleTheme } = useSettings()
 
 const waitingCount = computed(() => sessions.value.filter(s => s.phase === 'waiting_for_user').length)
 const projectCount = computed(() => new Set(sessions.value.map(s => s.project || '(default)')).size)
@@ -26,10 +26,10 @@ const currentTitle = computed(() => {
 </script>
 
 <template>
-  <div class="h-screen flex bg-[#1e1f20] text-zinc-200 overflow-hidden">
+  <div class="h-screen flex bg-[--bg-primary] text-[--text-secondary] overflow-hidden">
     <!-- Sidebar -->
     <Transition name="sidebar">
-      <div v-if="sidebarOpen" class="w-[256px] shrink-0 flex flex-col bg-[#131314] overflow-hidden">
+      <div v-if="sidebarOpen" class="w-[256px] shrink-0 flex flex-col bg-[--bg-secondary] overflow-hidden">
         <WorkspaceTab
           mode="sidebar"
           :aiMsg="aiMsg" :phase="phase" :sending="sending" :sid="sid"
@@ -44,10 +44,11 @@ const currentTitle = computed(() => {
       <AppHeader
         :activeTab="activeTab" :connected="connected" :waitingCount="waitingCount"
         :sessionCount="sessions.length" :projectCount="projectCount"
-        :currentTitle="currentTitle" :sidebarOpen="sidebarOpen" :appMode="appMode"
+        :currentTitle="currentTitle" :sidebarOpen="sidebarOpen" :appMode="appMode" :settings="settings"
         @update:activeTab="activeTab = $event"
         @toggleSidebar="sidebarOpen = !sidebarOpen"
         @update:appMode="appMode = $event"
+        @toggleTheme="toggleTheme"
       />
 
       <!-- Chat / Code / Vault mode — only show when activeTab is workspace -->

@@ -87,21 +87,37 @@ watch(() => props.sending, (val) => {
   }
 })
 
-const copyBtnHtml = (lang: string) =>
-  `<div class="code-header"><span class="code-lang">${lang}</span><button class="code-copy-btn" onclick="navigator.clipboard.writeText(this.closest('pre').querySelector('code').textContent).then(()=>{this.textContent='✓ 已复制';setTimeout(()=>this.textContent='复制',1500)})">复制</button></div>`
-
 const md = new MarkdownIt({
   html: true, linkify: true, typographer: true,
   highlight(str: string, lang: string) {
     if (hljs && lang && hljs.getLanguage(lang)) {
-      try { return copyBtnHtml(lang) + hljs.highlight(str, { language: lang }).value } catch {}
+      try { return hljs.highlight(str, { language: lang }).value } catch {}
     }
-    return copyBtnHtml(lang || 'code') + str
+    return '' // let markdown-it handle escaping
   }
 })
 
+function wrapCodeBlocks(html: string): string {
+  return html.replace(/<pre><code class="language-([^"]*)">([\s\S]*?)<\/code><\/pre>/g, (_match, lang, code) => {
+    const lines = code.split('\n')
+    const lineCount = lines[lines.length - 1] === '' ? lines.length - 1 : lines.length
+    const isCollapsible = lineCount > 15
+    const lineNums = Array.from({ length: lineCount }, (_, i) => `<span class="code-line-num">${i + 1}</span>`).join('')
+    return `<div class="code-block-wrapper">`
+      + `<div class="code-header">`
+      + `<span class="code-lang">${lang}</span>`
+      + `<div class="code-header-actions">`
+      + (isCollapsible ? `<button class="code-collapse-btn" onclick="this.closest('.code-block-wrapper').classList.toggle('collapsed');this.textContent=this.closest('.code-block-wrapper').classList.contains('collapsed')?'展开':'折叠'">折叠</button>` : '')
+      + `<button class="code-copy-btn" onclick="navigator.clipboard.writeText(this.closest('.code-block-wrapper').querySelector('pre code').textContent).then(()=>{this.textContent='✓ 已复制';setTimeout(()=>this.textContent='复制',1500)})">复制</button>`
+      + `</div></div>`
+      + `<div class="code-body"><div class="code-line-numbers">${lineNums}</div><pre><code>${code}</code></pre></div>`
+      + `</div>`
+  })
+}
+
 function renderMd(content: string): string {
-  return props.settings.markdown ? md.render(content) : `<pre style="white-space:pre-wrap;word-break:break-word;font-family:inherit;margin:0">${content.replace(/</g, '&lt;')}</pre>`
+  if (!props.settings.markdown) return `<pre style="white-space:pre-wrap;word-break:break-word;font-family:inherit;margin:0">${content.replace(/</g, '&lt;')}</pre>`
+  return wrapCodeBlocks(md.render(content))
 }
 
 const currentSession = computed(() => props.sessions.find(s => s.sid === props.sid))
@@ -321,27 +337,27 @@ onUnmounted(() => {
       <div class="max-w-[48rem] mx-auto px-6 pt-4 pb-6">
         <!-- Empty state: only show when truly idle with no history -->
         <div v-if="history.length === 0 && !loadingHistory && phase === 'idle'" class="flex flex-col items-start justify-end py-32 select-none max-w-[48rem]">
-          <div class="text-[#9aa0a6] text-lg mb-2 font-normal tracking-wide">Hi {{ settings.username || 'maile456' }}</div>
-          <div class="text-[#e3e3e1] text-4xl font-light tracking-tight">Where should we start?</div>
+          <div class="text-[--text-muted] text-lg mb-2 font-normal tracking-wide">Hi {{ settings.username || 'maile456' }}</div>
+          <div class="text-[--text-primary] text-4xl font-light tracking-tight">Where should we start?</div>
         </div>
 
         <!-- Loading -->
         <div v-if="loadingHistory" class="flex justify-center py-12">
-          <Loader2 :size="24" class="animate-spin text-[#5f6368]" />
+          <Loader2 :size="24" class="animate-spin text-[--text-dim]" />
         </div>
 
         <!-- Messages -->
         <template v-for="(msg, idx) in history" :key="idx">
           <!-- AI message -->
-          <div v-if="msg.role === 'ai'" :data-msg-idx="idx" class="mb-8">
+          <div v-if="msg.role === 'ai'" :data-msg-idx="idx" class="mb-8 msg-animate">
             <div class="flex items-center gap-3 mb-3">
               <img src="/avatar.png" alt="" class="w-8 h-8 rounded-full object-cover" />
-              <div class="text-sm font-medium text-[#e3e3e1]">{{ msg.model || displayName }}</div>
+              <div class="text-sm font-medium text-[--text-primary]">{{ msg.model || displayName }}</div>
             </div>
             <div class="pl-11">
               <div class="md-body" :style="{ fontSize: (settings.fontSize || 16) + 'px' }" v-html="renderMd(msg.content)" />
               <div class="flex items-center gap-1 mt-3">
-                <button @click="copyMsg(idx, msg.content)" class="h-7 px-2.5 flex items-center gap-1.5 rounded-full text-xs hover:bg-white/[0.06] transition-colors" :class="copiedIdx === idx ? 'text-blue-400' : 'text-[#9aa0a6]'">
+                <button @click="copyMsg(idx, msg.content)" class="h-7 px-2.5 flex items-center gap-1.5 rounded-full text-xs hover:bg-[--bg-hover] transition-colors" :class="copiedIdx === idx ? 'text-blue-400' : 'text-[--text-muted]'">
                   <component :is="copiedIdx === idx ? Check : Copy" :size="14" />
                   <span>{{ copiedIdx === idx ? '已复制' : '复制' }}</span>
                 </button>
@@ -350,12 +366,12 @@ onUnmounted(() => {
           </div>
 
           <!-- User message -->
-          <div v-else :data-msg-idx="idx" class="mb-8 flex justify-end gap-3">
-            <div class="max-w-[80%] bg-[#2b2d31] rounded-2xl rounded-br-md px-5 py-3.5">
+          <div v-else :data-msg-idx="idx" class="mb-8 flex justify-end gap-3 msg-animate">
+            <div class="max-w-[80%] bg-[--user-bubble] rounded-2xl rounded-br-md px-5 py-3.5">
               <div v-if="msg.images && msg.images.length" class="flex gap-2 flex-wrap mb-2">
                 <img v-for="(img, ii) in msg.images" :key="ii" :src="img" class="max-w-[200px] max-h-[200px] object-cover rounded-lg cursor-zoom-in" @click.stop="openLightbox(img)" />
               </div>
-              <div v-if="msg.content" class="text-[15px] text-[#e3e3e1] leading-relaxed whitespace-pre-wrap break-words">{{ msg.content }}</div>
+              <div v-if="msg.content" class="text-[15px] text-[--text-primary] leading-relaxed whitespace-pre-wrap break-words">{{ msg.content }}</div>
             </div>
             <img src="/user.jpg" alt="用户" class="w-8 h-8 rounded-full object-cover shrink-0 mt-0.5" />
           </div>
@@ -373,7 +389,7 @@ onUnmounted(() => {
                 </div>
                 <span class="thinking-text">思考中</span>
               </div>
-              <span class="text-[11px] text-[#5f6368] tabular-nums pl-[30px]">{{ thinkingTime }}s</span>
+              <span class="text-[11px] text-[--text-dim] tabular-nums pl-[30px]">{{ thinkingTime }}s</span>
             </div>
           </div>
         </div>
@@ -385,7 +401,7 @@ onUnmounted(() => {
         <button
           v-if="showJumpBtn"
           @click="scrollToBottom()"
-          class="jump-btn absolute left-1/2 -translate-x-1/2 bottom-4 flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#2b2d31] border border-[#3c3f43] text-[#e3e3e1] text-xs shadow-lg hover:bg-[#35373c] transition-colors"
+          class="jump-btn absolute left-1/2 -translate-x-1/2 bottom-4 flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[--bg-tertiary] border border-[--border-color] text-[--text-primary] text-xs shadow-lg hover:bg-[--bg-hover] transition-colors"
         >
           <ArrowDown :size="14" />
           <span>回到底部</span>
@@ -420,13 +436,13 @@ onUnmounted(() => {
             :disabled="sending"
             rows="1"
             :placeholder="phase === 'waiting_for_user' ? '输入你的回复...' : '给 maile456 发消息'"
-            class="w-full min-h-[32px] max-h-[200px] bg-transparent text-base text-[#e3e3e1] placeholder:text-[#5f6368] resize-none focus:outline-none disabled:opacity-30 leading-relaxed"
+            class="w-full min-h-[32px] max-h-[200px] bg-transparent text-base text-[--text-primary] placeholder:text-[--text-dim] resize-none focus:outline-none disabled:opacity-30 leading-relaxed"
           />
         </div>
         <!-- Bottom row -->
         <div class="flex items-center justify-between px-3 pb-3 pt-1">
           <div class="flex items-center gap-1">
-            <button @click="fileInput?.click()" class="w-10 h-10 flex items-center justify-center rounded-full text-[#9aa0a6] hover:text-[#e3e3e1] hover:bg-white/[0.06] transition-all" title="上传图片">
+            <button @click="fileInput?.click()" class="w-10 h-10 flex items-center justify-center rounded-full text-[--text-muted] hover:text-[--text-primary] hover:bg-[--bg-hover] transition-all" title="上传图片">
               <ImageIcon :size="20" />
             </button>
             <input ref="fileInput" type="file" accept="image/*" multiple class="hidden" @change="onFileChange" />
@@ -435,7 +451,7 @@ onUnmounted(() => {
             @click="handleSubmit"
             :disabled="sending || (!text.trim() && images.length === 0)"
             class="w-10 h-10 flex items-center justify-center rounded-full transition-all"
-            :class="sending ? 'text-[#5f6368] cursor-not-allowed' : (text.trim() || images.length > 0) ? 'bg-[#e3e3e1] text-[#1e1f20] hover:bg-white' : 'text-[#5f6368] cursor-not-allowed'"
+            :class="sending ? 'text-[--text-dim] cursor-not-allowed' : (text.trim() || images.length > 0) ? 'bg-[--text-primary] text-[--bg-primary] hover:bg-white' : 'text-[--text-dim] cursor-not-allowed'"
           >
             <Loader2 v-if="sending" :size="20" class="animate-spin" />
             <Send v-else :size="20" />
@@ -447,7 +463,7 @@ onUnmounted(() => {
         </Transition>
       </div>
       <div class="text-center mt-2">
-        <span class="text-xs text-[#5f6368]">Enter 发送 · Shift+Enter 换行</span>
+        <span class="text-xs text-[--text-dim]">Enter 发送 · Shift+Enter 换行</span>
       </div>
     </div>
 

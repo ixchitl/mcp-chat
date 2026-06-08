@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
-import { Send, ImageIcon, Copy, Check, Loader2, X, MessageSquare, Clock, ChevronLeft, ChevronRight, Trash2, Filter, FolderOpen, ChevronDown } from 'lucide-vue-next'
+import { Send, ImageIcon, Copy, Check, Loader2, X, MessageSquare, Clock, ChevronLeft, ChevronRight, Trash2, Filter, FolderOpen, ChevronDown, Search } from 'lucide-vue-next'
 import MarkdownIt from 'markdown-it'
 import 'highlight.js/styles/github-dark.min.css'
 import type { SessionInfo } from '../composables/useChat'
@@ -38,14 +38,12 @@ const textareaEl = ref<HTMLTextAreaElement | null>(null)
 const copied = ref(false)
 const sourceFilter = ref('')
 const projectFilter = ref('')
+const searchQuery = ref('')
 const dragging = ref(false)
 const showScrollTop = ref(false)
 const lightboxSrc = ref('')
 const cleaning = ref(false)
 const cleanedMsg = ref('')
-
-const copyBtnHtml = (lang: string) =>
-  `<div class="code-header"><span class="code-lang">${lang}</span><button class="code-copy-btn" onclick="navigator.clipboard.writeText(this.closest('pre').querySelector('code').textContent).then(()=>{this.textContent='✓ 已复制';setTimeout(()=>this.textContent='复制',1500)})">复制</button></div>`
 
 const md = new MarkdownIt({
   html: true,
@@ -53,15 +51,34 @@ const md = new MarkdownIt({
   typographer: true,
   highlight(str: string, lang: string) {
     if (hljs && lang && hljs.getLanguage(lang)) {
-      try { return copyBtnHtml(lang) + hljs.highlight(str, { language: lang }).value } catch {}
+      try { return hljs.highlight(str, { language: lang }).value } catch {}
     }
-    return copyBtnHtml(lang || 'code') + str
+    return '' // let markdown-it handle escaping
   }
 })
 
+function wrapCodeBlocks(html: string): string {
+  return html.replace(/<pre><code class="language-([^"]*)">([\s\S]*?)<\/code><\/pre>/g, (_match, lang, code) => {
+    const lines = code.split('\n')
+    const lineCount = lines[lines.length - 1] === '' ? lines.length - 1 : lines.length
+    const isCollapsible = lineCount > 15
+    const lineNums = Array.from({ length: lineCount }, (_, i) => `<span class="code-line-num">${i + 1}</span>`).join('')
+    return `<div class="code-block-wrapper">`
+      + `<div class="code-header">`
+      + `<span class="code-lang">${lang}</span>`
+      + `<div class="code-header-actions">`
+      + (isCollapsible ? `<button class="code-collapse-btn" onclick="this.closest('.code-block-wrapper').classList.toggle('collapsed');this.textContent=this.closest('.code-block-wrapper').classList.contains('collapsed')?'展开':'折叠'">折叠</button>` : '')
+      + `<button class="code-copy-btn" onclick="navigator.clipboard.writeText(this.closest('.code-block-wrapper').querySelector('pre code').textContent).then(()=>{this.textContent='✓ 已复制';setTimeout(()=>this.textContent='复制',1500)})">复制</button>`
+      + `</div></div>`
+      + `<div class="code-body"><div class="code-line-numbers">${lineNums}</div><pre><code>${code}</code></pre></div>`
+      + `</div>`
+  })
+}
+
 const renderedHtml = computed(() => {
   if (!props.aiMsg) return ''
-  return props.settings.markdown ? md.render(props.aiMsg) : `<pre style="white-space:pre-wrap;word-break:break-word;font-family:inherit;margin:0">${props.aiMsg.replace(/</g,'&lt;')}</pre>`
+  if (!props.settings.markdown) return `<pre style="white-space:pre-wrap;word-break:break-word;font-family:inherit;margin:0">${props.aiMsg.replace(/</g,'&lt;')}</pre>`
+  return wrapCodeBlocks(md.render(props.aiMsg))
 })
 
 const statusConfig = computed(() => {
@@ -129,7 +146,46 @@ const filteredSessions = computed(() => {
   let list = props.sessions
   if (sourceFilter.value) list = list.filter(s => (s.source || 'IDE') === sourceFilter.value)
   if (projectFilter.value) list = list.filter(s => (s.project || '(default)') === projectFilter.value)
+  if (searchQuery.value.trim()) {
+    const query = searchQuery.value.toLowerCase()
+    list = list.filter(s =>
+      (s.preview || '').toLowerCase().includes(query) ||
+      (s.project || '').toLowerCase().includes(query) ||
+      (s.source || '').toLowerCase().includes(query) ||
+      (s.model || '').toLowerCase().includes(query)
+    )
+  }
   return list
+})
+
+interface TimeGroup {
+  label: string
+  sessions: typeof props.sessions
+}
+const timeGroupedSessions = computed<TimeGroup[]>(() => {
+  const groups: TimeGroup[] = []
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
+  const yesterdayStart = new Date(todayStart); yesterdayStart.setDate(yesterdayStart.getDate() - 1)
+  const weekStart = new Date(todayStart); weekStart.setDate(weekStart.getDate() - 7)
+
+  const today: typeof props.sessions = []
+  const yesterday: typeof props.sessions = []
+  const thisWeek: typeof props.sessions = []
+  const older: typeof props.sessions = []
+
+  for (const s of filteredSessions.value) {
+    const ts = (s.updated || s.created) * 1000
+    if (ts >= todayStart.getTime()) today.push(s)
+    else if (ts >= yesterdayStart.getTime()) yesterday.push(s)
+    else if (ts >= weekStart.getTime()) thisWeek.push(s)
+    else older.push(s)
+  }
+
+  if (today.length) groups.push({ label: '今天', sessions: today })
+  if (yesterday.length) groups.push({ label: '昨天', sessions: yesterday })
+  if (thisWeek.length) groups.push({ label: '本周', sessions: thisWeek })
+  if (older.length) groups.push({ label: '更早', sessions: older })
+  return groups
 })
 const currentSource = computed(() => {
   const s = props.sessions.find(s => s.sid === props.sid)
@@ -371,52 +427,64 @@ onUnmounted(() => {
     <!-- Brand -->
     <div class="h-14 flex items-center px-5 gap-3 shrink-0">
       <img src="/avatar.png" alt="" class="w-7 h-7 rounded-full object-cover" />
-      <span class="text-base font-normal text-[#e3e3e1]">maile456</span>
+      <span class="text-base font-normal text-[--text-primary]">maile456</span>
     </div>
-    <!-- New chat hint -->
+    <!-- Search -->
     <div class="px-3 mb-1">
-      <div class="text-[13px] text-[#9aa0a6] px-3 py-1.5">近期对话</div>
+      <div class="relative">
+        <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-[--text-dim]" />
+        <input
+          v-model="searchQuery"
+          type="text"
+          placeholder="搜索对话..."
+          class="w-full h-8 pl-8 pr-3 rounded-lg bg-[--bg-hover] text-sm text-[--text-primary] placeholder:text-[--text-dim] border-none outline-none focus:ring-1 focus:ring-[--accent]/30 transition-all"
+        />
+      </div>
     </div>
-    <!-- Session list -->
+    <!-- Session list with time groups -->
     <div class="flex-1 overflow-y-auto px-2 pb-4">
-      <button
-        v-for="s in filteredSessions" :key="s.sid"
-        @click="emit('switchSession', s.sid)"
-        class="w-full text-left px-3 py-2.5 rounded-[20px] text-sm transition-all group flex items-center gap-3 mb-0.5 relative"
-        :class="s.sid === sid ? 'bg-[#2b2d31] text-[#e3e3e1]' : 'text-[#c4c7c5] hover:bg-white/[0.06]'"
-      >
-        <MessageSquare :size="16" class="shrink-0 text-[#9aa0a6]" />
-        <div class="flex-1 min-w-0">
-          <!-- 对话主题 -->
-          <div class="truncate leading-snug">{{ s.preview || '新会话' }}</div>
-          <!-- IDE / 文件夹 徽章 -->
-          <div v-if="s.source || s.project" class="flex items-center gap-1 mt-1 flex-wrap">
-            <span v-if="s.source" class="inline-flex items-center px-1.5 py-px rounded text-[10px] border leading-tight" :class="sourceClass(s.source)">
-              {{ s.source }}
-            </span>
-            <span v-if="s.project && s.project !== '(default)'" class="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-[10px] border border-white/10 bg-white/[0.04] text-[#9aa0a6] leading-tight max-w-[140px]">
-              <FolderOpen :size="10" class="shrink-0" />
-              <span class="truncate">{{ s.project }}</span>
-            </span>
-          </div>
-          <!-- 消息数 · 模型 · 连接状态 -->
-          <div class="text-xs text-[#5f6368] truncate mt-0.5">
-            <span v-if="s.phase === 'waiting_for_ai'" class="text-amber-400/80">思考中 <span class="tabular-nums">{{ thinkingTime(s.updated) }}</span></span>
-            <span v-else-if="unreadSids?.has(s.sid) && s.sid !== sid" class="text-red-400/80">未读</span>
-            <span v-else class="text-zinc-500">待回复</span>
-            <span v-if="(s.msg_count && s.msg_count > 1) || s.model"> · </span>
-            <span v-if="s.msg_count && s.msg_count > 1">{{ s.msg_count }} 条消息</span>
-            <span v-if="s.msg_count && s.msg_count > 1 && s.model"> · </span>
-            <span v-if="s.model">{{ s.model }}</span>
-          </div>
+      <template v-if="timeGroupedSessions.length > 0">
+        <div v-for="group in timeGroupedSessions" :key="group.label" class="mb-2">
+          <div class="text-[11px] text-[--text-dim] uppercase tracking-wider px-3 py-1.5 font-medium">{{ group.label }}</div>
+          <button
+            v-for="s in group.sessions" :key="s.sid"
+            @click="emit('switchSession', s.sid)"
+            class="session-item w-full text-left px-3 py-2.5 rounded-2xl text-sm transition-all group flex items-center gap-3 mb-0.5 relative"
+            :class="s.sid === sid ? 'bg-[--bg-tertiary] text-[--text-primary]' : 'text-[--text-secondary] hover:bg-[--bg-hover]'"
+          >
+            <MessageSquare :size="16" class="shrink-0 text-[--text-muted]" />
+            <div class="flex-1 min-w-0">
+              <div class="truncate leading-snug">{{ s.preview || '新会话' }}</div>
+              <div v-if="s.source || s.project" class="flex items-center gap-1 mt-1 flex-wrap">
+                <span v-if="s.source" class="inline-flex items-center px-1.5 py-px rounded text-[10px] border leading-tight" :class="sourceClass(s.source)">
+                  {{ s.source }}
+                </span>
+                <span v-if="s.project && s.project !== '(default)'" class="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-[10px] border border-[--border-color] bg-[--bg-hover] text-[--text-muted] leading-tight max-w-[140px]">
+                  <FolderOpen :size="10" class="shrink-0" />
+                  <span class="truncate">{{ s.project }}</span>
+                </span>
+              </div>
+              <div class="text-xs text-[--text-dim] truncate mt-0.5">
+                <span v-if="s.phase === 'waiting_for_ai'" class="text-amber-400/80">思考中 <span class="tabular-nums">{{ thinkingTime(s.updated) }}</span></span>
+                <span v-else-if="unreadSids?.has(s.sid) && s.sid !== sid" class="text-red-400/80">未读</span>
+                <span v-else class="text-zinc-500">{{ relTime(s.updated || s.created) }}</span>
+                <span v-if="(s.msg_count && s.msg_count > 1) || s.model"> · </span>
+                <span v-if="s.msg_count && s.msg_count > 1">{{ s.msg_count }} 条</span>
+                <span v-if="s.msg_count && s.msg_count > 1 && s.model"> · </span>
+                <span v-if="s.model">{{ s.model }}</span>
+              </div>
+            </div>
+            <span v-if="unreadSids?.has(s.sid) && s.sid !== sid" class="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0 shadow-[0_0_6px_rgba(239,68,68,0.5)]" />
+            <span v-else-if="s.phase === 'waiting_for_user'" class="w-2 h-2 rounded-full bg-blue-400 shrink-0 animate-pulse" />
+            <button @click.stop="emit('deleteSession', s.sid)" class="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full opacity-0 group-hover:opacity-100 hover:bg-[--bg-hover] text-[--text-muted] hover:text-red-400 transition-all" title="删除">
+              <X :size="14" />
+            </button>
+          </button>
         </div>
-        <span v-if="unreadSids?.has(s.sid) && s.sid !== sid" class="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0 shadow-[0_0_6px_rgba(239,68,68,0.5)]" />
-        <span v-else-if="s.phase === 'waiting_for_user'" class="w-2 h-2 rounded-full bg-blue-400 shrink-0 animate-pulse" />
-        <button @click.stop="emit('deleteSession', s.sid)" class="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full opacity-0 group-hover:opacity-100 hover:bg-white/[0.1] text-[#9aa0a6] hover:text-red-400 transition-all" title="删除">
-          <X :size="14" />
-        </button>
-      </button>
-      <div v-if="filteredSessions.length === 0" class="px-3 py-10 text-center text-sm text-[#5f6368]">暂无会话</div>
+      </template>
+      <div v-else class="px-3 py-10 text-center text-sm text-[--text-dim]">
+        {{ searchQuery ? '未找到匹配的对话' : '暂无会话' }}
+      </div>
     </div>
     <!-- Cleanup button -->
     <div class="shrink-0 px-3 pb-3">
@@ -424,7 +492,7 @@ onUnmounted(() => {
         @click="cleanupStale"
         :disabled="cleaning"
         class="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs transition-all"
-        :class="cleaning ? 'text-[#5f6368] cursor-not-allowed' : 'text-[#9aa0a6] hover:text-[#e3e3e1] hover:bg-white/[0.06]'"
+        :class="cleaning ? 'text-[--text-dim] cursor-not-allowed' : 'text-[--text-muted] hover:text-[--text-primary] hover:bg-[--bg-hover]'"
       >
         <Loader2 v-if="cleaning" :size="14" class="animate-spin" />
         <Trash2 v-else :size="14" />
@@ -442,15 +510,15 @@ onUnmounted(() => {
         <div class="flex items-center gap-3 mb-4">
           <img src="/avatar.png" alt="maile456" class="w-8 h-8 rounded-full object-cover" />
           <div>
-            <div class="text-sm font-medium text-[#e3e3e1]">{{ displayName }}</div>
-            <div v-if="currentSource" class="text-xs text-[#9aa0a6]">{{ currentSource }}</div>
+            <div class="text-sm font-medium text-[--text-primary]">{{ displayName }}</div>
+            <div v-if="currentSource" class="text-xs text-[--text-muted]">{{ currentSource }}</div>
           </div>
         </div>
         <!-- AI message body -->
         <div class="md-body" :style="{ fontSize: (settings.fontSize || 16) + 'px' }" v-html="renderedHtml" />
         <!-- Action row -->
-        <div class="flex items-center gap-1 mt-4 pt-3 border-t border-white/[0.06]">
-          <button @click="copyAi" class="h-8 px-3 flex items-center gap-1.5 rounded-full text-sm hover:bg-white/[0.06] transition-colors" :class="copied ? 'text-blue-400' : 'text-[#9aa0a6]'" title="复制">
+        <div class="flex items-center gap-1 mt-4 pt-3 border-t border-[--border-color]">
+          <button @click="copyAi" class="h-8 px-3 flex items-center gap-1.5 rounded-full text-sm hover:bg-[--bg-hover] transition-colors" :class="copied ? 'text-blue-400' : 'text-[--text-muted]'" title="复制">
             <component :is="copied ? Check : Copy" :size="16" />
             <span>{{ copied ? '已复制' : '复制' }}</span>
           </button>
@@ -460,11 +528,11 @@ onUnmounted(() => {
         <div v-if="phase === 'waiting_for_ai'" class="mt-8 flex items-center gap-3">
           <img src="/avatar.png" alt="" class="w-8 h-8 rounded-full object-cover" />
           <div class="flex gap-1.5">
-            <span class="w-2 h-2 rounded-full bg-[#5f6368] animate-bounce" style="animation-delay:0ms" />
-            <span class="w-2 h-2 rounded-full bg-[#5f6368] animate-bounce" style="animation-delay:150ms" />
-            <span class="w-2 h-2 rounded-full bg-[#5f6368] animate-bounce" style="animation-delay:300ms" />
+            <span class="w-2 h-2 rounded-full bg-[--text-dim] animate-bounce" style="animation-delay:0ms" />
+            <span class="w-2 h-2 rounded-full bg-[--text-dim] animate-bounce" style="animation-delay:150ms" />
+            <span class="w-2 h-2 rounded-full bg-[--text-dim] animate-bounce" style="animation-delay:300ms" />
           </div>
-          <span class="text-sm text-[#9aa0a6]">正在思考...</span>
+          <span class="text-sm text-[--text-muted]">正在思考...</span>
         </div>
       </div>
 
@@ -474,23 +542,23 @@ onUnmounted(() => {
           <div class="flex items-center gap-3 mb-4">
             <img src="/avatar.png" alt="" class="w-10 h-10 rounded-full object-cover" />
             <div class="flex gap-1.5">
-              <span class="w-2.5 h-2.5 rounded-full bg-[#5f6368] animate-bounce" style="animation-delay:0ms" />
-              <span class="w-2.5 h-2.5 rounded-full bg-[#5f6368] animate-bounce" style="animation-delay:150ms" />
-              <span class="w-2.5 h-2.5 rounded-full bg-[#5f6368] animate-bounce" style="animation-delay:300ms" />
+              <span class="w-2.5 h-2.5 rounded-full bg-[--text-dim] animate-bounce" style="animation-delay:0ms" />
+              <span class="w-2.5 h-2.5 rounded-full bg-[--text-dim] animate-bounce" style="animation-delay:150ms" />
+              <span class="w-2.5 h-2.5 rounded-full bg-[--text-dim] animate-bounce" style="animation-delay:300ms" />
             </div>
           </div>
-          <div class="text-sm text-[#9aa0a6]">maile456 正在思考...</div>
+          <div class="text-sm text-[--text-muted]">maile456 正在思考...</div>
         </template>
         <template v-else>
-          <div class="text-[#9aa0a6] text-lg mb-2 font-normal tracking-wide">Hi there</div>
-          <div class="text-[#e3e3e1] text-4xl font-light tracking-tight">在 IDE 中开始对话</div>
+          <div class="text-[--text-muted] text-lg mb-2 font-normal tracking-wide">Hi there</div>
+          <div class="text-[--text-primary] text-4xl font-light tracking-tight">在 IDE 中开始对话</div>
         </template>
       </div>
 
       <!-- Scroll to top -->
       <Transition name="tab-fade">
         <button v-if="showScrollTop" @click="scrollToTop"
-          class="fixed bottom-28 right-6 w-10 h-10 bg-[#2b2d31] rounded-full flex items-center justify-center text-[#9aa0a6] hover:text-[#e3e3e1] hover:bg-[#35373b] transition-all shadow-xl z-10 text-lg"
+          class="fixed bottom-28 right-6 w-10 h-10 bg-[--bg-tertiary] rounded-full flex items-center justify-center text-[--text-muted] hover:text-[--text-primary] hover:bg-[--bg-hover] transition-all shadow-xl z-10 text-lg"
           title="回到顶部">
           ↑
         </button>
@@ -524,13 +592,13 @@ onUnmounted(() => {
             :disabled="sending"
             rows="1"
             :placeholder="phase === 'waiting_for_user' ? '输入你的回复...' : 'Ask maile456'"
-            class="w-full min-h-[32px] max-h-[200px] bg-transparent text-base text-[#e3e3e1] placeholder:text-[#5f6368] resize-none focus:outline-none disabled:opacity-30 leading-relaxed"
+            class="w-full min-h-[32px] max-h-[200px] bg-transparent text-base text-[--text-primary] placeholder:text-[--text-dim] resize-none focus:outline-none disabled:opacity-30 leading-relaxed"
           />
         </div>
         <!-- Bottom row -->
         <div class="flex items-center justify-between px-3 pb-3 pt-1">
           <div class="flex items-center gap-1">
-            <button @click="fileInput?.click()" class="w-10 h-10 flex items-center justify-center rounded-full text-[#9aa0a6] hover:text-[#e3e3e1] hover:bg-white/[0.06] transition-all" title="上传图片">
+            <button @click="fileInput?.click()" class="w-10 h-10 flex items-center justify-center rounded-full text-[--text-muted] hover:text-[--text-primary] hover:bg-[--bg-hover] transition-all" title="上传图片">
               <ImageIcon :size="20" />
             </button>
             <input ref="fileInput" type="file" accept="image/*" multiple class="hidden" @change="onFileChange" />
@@ -539,7 +607,7 @@ onUnmounted(() => {
             @click="handleSubmit"
             :disabled="sending || (!text.trim() && images.length === 0)"
             class="w-10 h-10 flex items-center justify-center rounded-full transition-all"
-            :class="sending ? 'text-[#5f6368] cursor-not-allowed' : (text.trim() || images.length > 0) ? 'bg-[#e3e3e1] text-[#1e1f20] hover:bg-white' : 'text-[#5f6368] cursor-not-allowed'"
+            :class="sending ? 'text-[--text-dim] cursor-not-allowed' : (text.trim() || images.length > 0) ? 'bg-[--text-primary] text-[--bg-primary] hover:bg-[--text-primary]' : 'text-[--text-dim] cursor-not-allowed'"
           >
             <Loader2 v-if="sending" :size="20" class="animate-spin" />
             <Send v-else :size="20" />
@@ -551,7 +619,7 @@ onUnmounted(() => {
         </Transition>
       </div>
       <div class="text-center mt-2">
-        <span class="text-xs text-[#5f6368]">Enter 发送 · Shift+Enter 换行</span>
+        <span class="text-xs text-[--text-dim]">Enter 发送 · Shift+Enter 换行</span>
       </div>
     </div>
   </template>

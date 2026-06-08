@@ -14,7 +14,7 @@ import { useSettings } from './composables/useSettings'
 const activeTab = ref('workspace')
 const sidebarOpen = ref(true)
 const appMode = ref<'chat' | 'code' | 'vault'>('chat')
-const { aiMsg, phase, sending, connected, sid, sessions, activeSid, wsLatency, submitError, unreadSids, submit, switchSession, deleteSession, deleteProject } = useChat()
+const { aiMsg, phase, sending, connected, sid, sessions, activeSid, wsLatency, submitError, pendingUpdates, unreadSids, submit, switchSession, deleteSession, deleteProject } = useChat()
 const { settings, toggleTheme } = useSettings()
 
 const waitingCount = computed(() => sessions.value.filter(s => s.phase === 'waiting_for_user').length)
@@ -56,7 +56,7 @@ const currentTitle = computed(() => {
         <ChatMode
           v-show="appMode === 'chat'"
           :aiMsg="aiMsg" :phase="phase" :sending="sending" :sid="sid"
-          :sessions="sessions" :activeSid="activeSid" :settings="settings" :submitError="submitError"
+          :sessions="sessions" :activeSid="activeSid" :settings="settings" :submitError="submitError" :pendingUpdates="pendingUpdates"
           @submit="submit" @switchSession="switchSession" @deleteSession="deleteSession" @deleteProject="deleteProject"
         />
         <WorkspaceTab

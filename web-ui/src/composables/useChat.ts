@@ -14,6 +14,14 @@ export interface SessionInfo {
   alive?: boolean
 }
 
+export interface UpdateEntry {
+  status: string    // 'thinking' | 'tool_call' | 'file_change' | 'progress'
+  summary: string
+  detail?: string
+  tool_name?: string
+  ts: number
+}
+
 export function useChat() {
   const aiMsg = ref('')
   const phase = ref('idle')
@@ -26,6 +34,7 @@ export function useChat() {
   const lastActivity = ref(Date.now())
   const wsLatency = ref(-1)          // ms, -1 = unknown
   const submitError = ref('')
+  const pendingUpdates = ref<UpdateEntry[]>([])
   const readCounts = ref<Record<string, number>>({})
   let initialLoad = true
 
@@ -49,7 +58,7 @@ export function useChat() {
     document.title = origTitle
   }
 
-  function applyState(data: { ai_msg: string; phase: string; msg_id: number; sid?: string; ts?: number }) {
+  function applyState(data: { ai_msg: string; phase: string; msg_id: number; sid?: string; ts?: number; pending_updates?: UpdateEntry[] }) {
     // Ignore state for a different session
     if (data.sid && sid.value && data.sid !== sid.value) return
     // Timestamp dedup: skip stale data
@@ -61,6 +70,14 @@ export function useChat() {
     // Only skip blank updates for the *current* session to avoid flash during continuous chat.
     if (data.ai_msg || data.phase === 'waiting_for_user' || mid === 0) {
       aiMsg.value = data.ai_msg
+    }
+    // Update pending_updates for real-time progress display
+    if (data.pending_updates) {
+      pendingUpdates.value = data.pending_updates
+    }
+    // Clear pending updates when AI finishes (phase transitions to waiting_for_user)
+    if (data.phase === 'waiting_for_user') {
+      pendingUpdates.value = []
     }
     phase.value = data.phase
     msgId.value = data.msg_id
@@ -402,5 +419,5 @@ export function useChat() {
     )
   })
 
-  return { aiMsg, phase, msgId, sid, sending, connected, sessions, activeSid, lastActivity, wsLatency, submitError, unreadSids, submit, switchSession, deleteSession, deleteProject }
+  return { aiMsg, phase, msgId, sid, sending, connected, sessions, activeSid, lastActivity, wsLatency, submitError, pendingUpdates, unreadSids, submit, switchSession, deleteSession, deleteProject }
 }

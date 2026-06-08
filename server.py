@@ -57,6 +57,7 @@ def _new_session(
         "project": project,
         "model": model,
         "history": history,
+        "pending_updates": [],  # stream_update() intermediate states
         "_listener": False,
         # API bridge fields
         "_api_waiting": False,
@@ -81,6 +82,7 @@ def _session_state(s: dict) -> dict:
         "phase": s["phase"],
         "msg_id": s["msg_id"],
         "ts": s["updated"],
+        "pending_updates": s.get("pending_updates", []),
     }
 
 
@@ -744,8 +746,69 @@ def get_prompt() -> str:
         "2. MANDATORY CALL: After finishing ANY user task, you MUST immediately call chat(ai_message) to report back. Do not stop without calling it.\n"
         "3. Sub-agents must NEVER call chat(ai_message).\n"
         "4. Always use timeout=172800.\n"
-        "5. ALWAYS pass source (your IDE name, e.g. 'Windsurf', 'Cursor', 'Copilot'), project (current workspace name), and model (the AI model you are using, e.g. 'claude-3.5-sonnet', 'gpt-4o') when calling chat()."
+        "5. ALWAYS pass source (your IDE name, e.g. 'Windsurf', 'Cursor', 'Copilot'), project (current workspace name), and model (the AI model you are using, e.g. 'claude-3.5-sonnet', 'gpt-4o') when calling chat().\n\n"
+        "## Real-time Progress Updates\n\n"
+        "Use stream_update() to push intermediate progress to the user's Web UI BEFORE calling chat().\n"
+        "This lets the user see what you're doing in real-time instead of just 'thinking...'.\n\n"
+        "Call stream_update() when you:\n"
+        "- Start analyzing a task: stream_update(status='thinking', summary='Analyzing requirements...')\n"
+        "- Call a tool: stream_update(status='tool_call', tool_name='read_file', summary='Reading server.py')\n"
+        "- Modify a file: stream_update(status='file_change', summary='Modified ChatMode.vue', detail='added theme toggle')\n"
+        "- Make progress: stream_update(status='progress', summary='Step 2/5: Updating styles')\n\n"
+        "stream_update() returns immediately and does NOT block. Use it liberally."
     )
+
+
+@mcp.tool()
+async def stream_update(
+    status: str,
+    summary: str = "",
+    detail: str = "",
+    tool_name: str = "",
+    source: str = "",
+    project: str = "",
+) -> str:
+    """Push intermediate progress to the Web UI without blocking.
+
+    Call this BEFORE doing work so the user can see real-time progress.
+    This tool returns immediately — it does NOT wait for user input.
+
+    Args:
+        status: One of 'thinking', 'tool_call', 'file_change', 'progress'.
+        summary: Short description of what you're doing.
+        detail: Optional longer detail (tool args, diff content, etc).
+        tool_name: Name of the tool being called (for status='tool_call').
+        source: IDE identifier.
+        project: Project name.
+    """
+    update_entry = {
+        "status": status,
+        "summary": summary,
+        "detail": detail,
+        "tool_name": tool_name,
+        "ts": time.time(),
+    }
+
+    # Find the active session for this source+project
+    session = None
+    with _lock:
+        for s in _sessions.values():
+            if s["source"] == source and s["project"] == project and s.get("_listener"):
+                session = s
+                break
+        # Fallback: find any session that is waiting_for_ai
+        if not session:
+            for s in _sessions.values():
+                if s["phase"] in ("waiting_for_ai", "idle") and s.get("_listener"):
+                    session = s
+                    break
+
+    if session:
+        session["pending_updates"].append(update_entry)
+        session["updated"] = time.time()
+        _broadcast_state(session["sid"])
+
+    return "ok"
 
 
 @mcp.tool()
@@ -804,9 +867,11 @@ async def chat(
         session["ai_msg"] = ai_message
         session["user_msg"] = ""
         if not session.get("_api_waiting"):
-            session["history"].append(
-                {"role": "ai", "content": ai_message, "ts": time.time(), "model": model}
-            )
+            ai_entry = {"role": "ai", "content": ai_message, "ts": time.time(), "model": model}
+            if session.get("pending_updates"):
+                ai_entry["updates"] = list(session["pending_updates"])
+            session["history"].append(ai_entry)
+        session["pending_updates"] = []  # clear after saving to history
         session["evt"] = threading.Event()  # fresh event for this round
         session["phase"] = "waiting_for_user"
         session["msg_id"] += 1

@@ -3,7 +3,8 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Send, ImageIcon, Copy, Check, Loader2, X, RefreshCw, ArrowDown } from 'lucide-vue-next'
 import MarkdownIt from 'markdown-it'
 import 'highlight.js/styles/github-dark.min.css'
-import type { SessionInfo } from '../composables/useChat'
+import { Wrench, FileEdit, Brain, Zap, ChevronDown as ChevDown } from 'lucide-vue-next'
+import type { SessionInfo, UpdateEntry } from '../composables/useChat'
 import type { Settings } from '../composables/useSettings'
 
 let hljs: typeof import('highlight.js').default | null = null
@@ -26,6 +27,7 @@ const props = defineProps<{
   activeSid: string
   settings: Settings
   submitError: string
+  pendingUpdates: UpdateEntry[]
 }>()
 const emit = defineEmits<{
   submit: [msg: string, images?: string[]]
@@ -44,6 +46,27 @@ const lightboxSrc = ref('')
 const history = ref<ChatMessage[]>([])
 const loadingHistory = ref(false)
 const copiedIdx = ref(-1)
+
+// Progress updates panel
+const updatesExpanded = ref(true)
+function updateIcon(status: string) {
+  switch (status) {
+    case 'thinking': return Brain
+    case 'tool_call': return Wrench
+    case 'file_change': return FileEdit
+    case 'progress': return Zap
+    default: return Wrench
+  }
+}
+function updateIconClass(status: string) {
+  switch (status) {
+    case 'thinking': return 'text-purple-400'
+    case 'tool_call': return 'text-blue-400'
+    case 'file_change': return 'text-amber-400'
+    case 'progress': return 'text-emerald-400'
+    default: return 'text-[--text-muted]'
+  }
+}
 
 // Thinking indicator with minimum display time + elapsed timer
 const showThinking = ref(false)
@@ -377,19 +400,37 @@ onUnmounted(() => {
           </div>
         </template>
 
-        <!-- Thinking indicator -->
+        <!-- Thinking indicator + progress panel -->
         <Transition name="thinking-fade">
         <div v-if="showThinking" class="mb-8">
           <div class="flex items-start gap-3">
             <img src="/avatar.png" alt="" class="w-8 h-8 rounded-full object-cover shrink-0 mt-0.5" />
-            <div class="flex flex-col gap-1.5 pt-1">
+            <div class="flex flex-col gap-1.5 pt-1 flex-1 min-w-0">
               <div class="flex items-center gap-2.5">
                 <div class="thinking-breathe">
                   <span></span><span></span><span></span>
                 </div>
-                <span class="thinking-text">思考中</span>
+                <span class="thinking-text">{{ pendingUpdates.length > 0 ? (pendingUpdates[pendingUpdates.length - 1].summary || '处理中') : '思考中' }}</span>
               </div>
               <span class="text-[11px] text-[--text-dim] tabular-nums pl-[30px]">{{ thinkingTime }}s</span>
+
+              <!-- Progress updates timeline -->
+              <div v-if="pendingUpdates.length > 0" class="mt-2 ml-1">
+                <button @click="updatesExpanded = !updatesExpanded" class="flex items-center gap-1.5 text-xs text-[--text-muted] hover:text-[--text-secondary] transition-colors mb-1.5">
+                  <ChevDown :size="12" class="transition-transform" :class="updatesExpanded ? '' : '-rotate-90'" />
+                  <span>{{ pendingUpdates.length }} 步操作</span>
+                </button>
+                <div v-show="updatesExpanded" class="space-y-1 border-l-2 border-[--border-color] pl-3 ml-1">
+                  <div v-for="(upd, i) in pendingUpdates" :key="i" class="flex items-start gap-2 text-xs msg-animate" :style="{ animationDelay: i * 50 + 'ms' }">
+                    <component :is="updateIcon(upd.status)" :size="13" class="shrink-0 mt-0.5" :class="updateIconClass(upd.status)" />
+                    <div class="min-w-0 flex-1">
+                      <span class="text-[--text-secondary]">{{ upd.summary || upd.status }}</span>
+                      <span v-if="upd.tool_name" class="ml-1.5 px-1.5 py-px rounded text-[10px] bg-[--accent-bg] text-[--accent]">{{ upd.tool_name }}</span>
+                      <div v-if="upd.detail" class="mt-0.5 text-[10px] text-[--text-dim] truncate max-w-[400px]" :title="upd.detail">{{ upd.detail }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

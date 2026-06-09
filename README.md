@@ -103,7 +103,8 @@ git clone https://github.com/maile456/mcp-chat.git
 cd mcp-chat
 
 # 安装 Python 依赖
-pip install mcp[cli] websockets
+pip install -r requirements.txt
+# 或手动安装：pip install mcp[cli]
 
 # 启动服务
 python server.py
@@ -229,6 +230,37 @@ claude mcp add mcp-chat --transport http http://127.0.0.1:8080/mcp
   }
 }
 ```
+
+### Aone Copilot
+
+在 VSCode 中打开 Aone Copilot 设置页面，找到 **MCP Servers** 区域，点击「新建 MCP Server」，选择**全局添加**，填入以下配置：
+
+```json
+{
+  "mcp-chat": {
+    "type": "http",
+    "url": "http://127.0.0.1:8080/mcp"
+  }
+}
+```
+
+> ⚠️ **注意**：需要先启动 `python server.py` 后端服务，再添加 MCP Server。
+
+<details>
+<summary><strong>⏱️ 超时设置（重要）</strong></summary>
+
+MCP Chat 的 `chat()` 工具需要等待用户回复，可能会超过默认超时时间。需要在两个地方调整：
+
+**1. MCP 超时时间**
+
+在 MCP Servers 同一页面下，点击小齿轮按钮（⚙️），将 MCP 超时时间设置为 **3599 秒**。
+
+**2. VSCode 插件工具调用超时**
+
+在 VSCode 的设置（`Ctrl+,`）中搜索 Aone Copilot 插件的工具调用超时时间设置，将其修改为 **86400 秒**。
+
+> 💡 这两个超时设置的关系：MCP 超时控制单次工具调用的最长等待时间，VSCode 插件超时控制整体工具调用链路的超时。建议两个都设置以确保长时间等待不会被中断。服务端默认心跳间隔为 50 分钟（可通过环境变量 `MCP_CHAT_HEARTBEAT_TIMEOUT` 调整），会在超时前自动续约。
+</details>
 
 ---
 

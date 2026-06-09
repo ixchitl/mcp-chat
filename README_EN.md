@@ -106,7 +106,8 @@ git clone https://github.com/maile456/mcp-chat.git
 cd mcp-chat
 
 # Install Python dependencies
-pip install mcp[cli] websockets
+pip install -r requirements.txt
+# Or manually: pip install mcp[cli]
 
 # Start the server
 python server.py
@@ -232,6 +233,37 @@ File: `%APPDATA%\Claude\claude_desktop_config.json` (Windows) / `~/Library/Appli
   }
 }
 ```
+
+### Aone Copilot
+
+In VSCode, open Aone Copilot settings, find the **MCP Servers** section, click "New MCP Server", select **Global**, and enter:
+
+```json
+{
+  "mcp-chat": {
+    "type": "http",
+    "url": "http://127.0.0.1:8080/mcp"
+  }
+}
+```
+
+> ⚠️ **Note**: Start `python server.py` first, then add the MCP Server.
+
+<details>
+<summary><strong>⏱️ Timeout Settings (Important)</strong></summary>
+
+MCP Chat's `chat()` tool waits for user replies, which may exceed the default timeout. Adjust in two places:
+
+**1. MCP Timeout**
+
+On the same MCP Servers page, click the gear icon (⚙️) and set the MCP timeout to **3599 seconds**.
+
+**2. VSCode Plugin Tool Call Timeout**
+
+In VSCode Settings (`Ctrl+,`), search for Aone Copilot's tool call timeout and set it to **86400 seconds**.
+
+> 💡 The server's default heartbeat interval is 50 minutes (configurable via `MCP_CHAT_HEARTBEAT_TIMEOUT` env var), which auto-renews before timeout.
+</details>
 
 ---
 

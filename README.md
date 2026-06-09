@@ -85,6 +85,10 @@ MCP Chat 通过 MCP 协议让 IDE 里的 AI 进入一个 **chat() 循环** — �
 - **Web UI** — 浏览器里和 IDE AI 聊天，支持 Markdown 渲染、代码高亮、图片上传、多会话管理
 - **OpenAI / Anthropic 兼容 API** — 支持 `/v1/chat/completions`、`/v1/responses`、`/v1/messages`，支持流式响应，可对接 OpenAI SDK 与 Anthropic SDK
 - **多 IDE 支持** — Windsurf、Cursor、GitHub Copilot、Claude Code / Desktop 同时连接，各自独立会话
+- **实时进度推送** — AI 工作过程中通过 `stream_update()` 实时显示当前步骤（读取文件、执行命令等）
+- **工作轨迹记录** — 通过 `trace` 参数记录 AI 完整工作过程，前端可折叠展示思考→搜索→修改→验证全流程
+- **会话持久化** — 所有会话自动落盘到 `~/.mcp-chat/sessions/`，重启不丢失历史
+- **深色/浅色主题** — 支持一键切换主题，CSS 变量驱动
 - **零配置启动** — Web UI 已预构建，安装依赖后直接运行
 - **单文件后端** — 整个服务端只有一个 `server.py`，无框架依赖，易于理解和二次开发
 
@@ -341,7 +345,8 @@ mcp-chat/
 | 工具 | 参数 | 说明 |
 |------|------|------|
 | `get_prompt` | — | 返回 Chat 工作流规则 |
-| `chat` | `ai_message` (必填), `model`, `source`, `project` | 发送消息到 Web UI 并等待用户回复 |
+| `chat` | `ai_message` (必填), `model`, `source`, `project`, `trace` | 发送消息到 Web UI 并等待用户回复 |
+| `stream_update` | `status` (必填), `summary`, `detail`, `tool_name`, `source`, `project` | 推送实时进度到 Web UI（不阻塞） |
 
 ### API 端点
 
@@ -406,6 +411,21 @@ Web UI 随时可用（查看历史、管理会话等）。但要让 AI 回复，
 
 Web UI 支持多会话，每个用户可以独立聊天。但每个 IDE 连接同时只能处理一个 chat() 循环。如果需要多人并发，可以开多个 IDE 实例，每个跑一个 server。
 </details>
+
+---
+
+## 推荐 User Rules 配置
+
+在你的 IDE（如 Cursor）的 User Rules 中添加以下内容，让 AI 在长对话中主动管理上下文：
+
+```markdown
+## Auto Context Compression
+
+If the conversation becomes long (many tool calls, large file reads), 
+and you sense context is getting heavy, call compress_context() proactively.
+After compression, resume work normally — use chat() to continue the conversation.
+mcp-chat session history is persisted independently and won't be affected.
+```
 
 ---
 

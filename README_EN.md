@@ -88,8 +88,12 @@ Different IDEs have different billing models, so the effect varies:
 - **Web UI** — Chat with your IDE AI in the browser. Markdown rendering, syntax highlighting, image upload, multi-session management.
 - **OpenAI / Anthropic-compatible API** — Supports `/v1/chat/completions`, `/v1/responses`, and `/v1/messages` with streaming support. Works with OpenAI SDK and Anthropic SDK clients.
 - **Multi-IDE support** — Windsurf, Cursor, GitHub Copilot, Claude Code / Desktop can connect simultaneously with independent sessions.
+- **Real-time progress** — AI pushes live status updates via `stream_update()` during work (reading files, running commands, etc.).
+- **Work trace logging** — Record the AI's full workflow via the `trace` parameter. The frontend displays collapsible thinking → search → edit → verify flows.
+- **Session persistence** — All sessions are automatically saved to `~/.mcp-chat/sessions/`. History survives restarts.
+- **Dark / Light theme** — One-click theme toggle, driven by CSS variables.
 - **Zero-config startup** — Web UI is pre-built. Just install Python dependencies and run.
-- **Single-file backend** — The entire server is one `server.py`. Easy to understand and extend.
+- **Single-file backend** — The entire server is one `server.py`. No framework dependencies. Easy to understand and extend.
 
 ---
 
@@ -344,7 +348,8 @@ mcp-chat/
 | Tool | Parameters | Description |
 |------|-----------|-------------|
 | `get_prompt` | — | Returns the chat workflow rules |
-| `chat` | `ai_message` (required), `model`, `source`, `project` | Send a message to Web UI and wait for user reply |
+| `chat` | `ai_message` (required), `model`, `source`, `project`, `trace` | Send a message to Web UI and wait for user reply |
+| `stream_update` | `status` (required), `summary`, `detail`, `tool_name`, `source`, `project` | Push real-time progress to Web UI (non-blocking) |
 
 ### API Endpoints
 
@@ -409,6 +414,21 @@ Whatever your IDE subscription provides. MCP Chat is model-agnostic — if the I
 
 The Web UI supports multiple sessions — each user can chat independently. However, each IDE connection can only handle one chat() loop at a time. For concurrent multi-user access, run multiple IDE instances, each with its own server.
 </details>
+
+---
+
+## Recommended User Rules
+
+Add the following to your IDE's User Rules (e.g., Cursor) so the AI proactively manages context during long conversations:
+
+```markdown
+## Auto Context Compression
+
+If the conversation becomes long (many tool calls, large file reads), 
+and you sense context is getting heavy, call compress_context() proactively.
+After compression, resume work normally — use chat() to continue the conversation.
+mcp-chat session history is persisted independently and won't be affected.
+```
 
 ---
 

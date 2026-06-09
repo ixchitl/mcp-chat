@@ -67,12 +67,109 @@ def _new_session(
     }
 
 
-def _signal_change():
+# ---------------------------------------------------------------------------
+# Session Persistence — save/load to ~/.mcp-chat/sessions/
+# ---------------------------------------------------------------------------
+_PERSIST_DIR = Path.home() / ".mcp-chat" / "sessions"
+_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+_dirty_sids: set = set()  # sessions that need saving
+
+
+def _save_session(session: dict):
+    """Save a single session to disk as JSON."""
+    data = {
+        "sid": session["sid"],
+        "source": session.get("source", ""),
+        "project": session.get("project", ""),
+        "model": session.get("model", ""),
+        "created": session.get("created", 0),
+        "updated": session.get("updated", 0),
+        "history": session.get("history", []),
+    }
+    path = _PERSIST_DIR / f"{session['sid']}.json"
+    try:
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[persist] Failed to save session {session['sid']}: {e}", file=sys.stderr)
+
+
+def _load_sessions():
+    """Load all persisted sessions from disk on startup."""
+    loaded = 0
+    for path in _PERSIST_DIR.glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            sid = data.get("sid", path.stem)
+            if sid in _sessions:
+                continue  # already exists in memory
+            session = _new_session(
+                source=data.get("source", ""),
+                project=data.get("project", ""),
+                model=data.get("model", ""),
+            )
+            session["sid"] = sid
+            session["created"] = data.get("created", time.time())
+            session["updated"] = data.get("updated", time.time())
+            session["history"] = data.get("history", [])
+            # Restore last AI message from history
+            for entry in reversed(session["history"]):
+                if entry.get("role") == "ai":
+                    session["ai_msg"] = entry.get("content", "")
+                    session["model"] = entry.get("model", session["model"])
+                    break
+            session["phase"] = "idle"
+            session["msg_id"] = len(session["history"])
+            _sessions[sid] = session
+            loaded += 1
+        except Exception as e:
+            print(f"[persist] Failed to load {path.name}: {e}", file=sys.stderr)
+    if loaded:
+        print(f"[persist] Restored {loaded} sessions from {_PERSIST_DIR}", file=sys.stderr)
+
+
+def _delete_session_file(sid: str):
+    """Delete a session file from disk."""
+    path = _PERSIST_DIR / f"{sid}.json"
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _persist_dirty():
+    """Save all dirty sessions to disk (called periodically)."""
+    with _lock:
+        sids = list(_dirty_sids)
+        _dirty_sids.clear()
+    for sid in sids:
+        session = _sessions.get(sid)
+        if session:
+            _save_session(session)
+
+
+def _start_persist_timer():
+    """Start a background timer that saves dirty sessions every 30 seconds."""
+    def tick():
+        while True:
+            time.sleep(30)
+            _persist_dirty()
+    t = threading.Thread(target=tick, daemon=True)
+    t.start()
+
+
+# Load persisted sessions on import
+_load_sessions()
+_start_persist_timer()
+
+
+def _signal_change(sid: str = ""):
     global _version
     _version += 1
     _change_evt.set()
     _change_evt.clear()
     _broadcast_sessions()
+    if sid:
+        _dirty_sids.add(sid)
 
 
 def _session_state(s: dict) -> dict:
@@ -411,7 +508,7 @@ async def api_submit(request):
     s["phase"] = "waiting_for_ai"
     s["updated"] = time.time()
     s["evt"].set()
-    _signal_change()
+    _signal_change(sid)
     _broadcast_state(sid)
     return JSONResponse({"ok": True, **_session_state(s)})
 
@@ -440,6 +537,7 @@ async def api_delete(request):
     with _lock:
         removed = _sessions.pop(sid, None)
     if removed:
+        _delete_session_file(sid)
         _signal_change()
     return JSONResponse({"ok": True})
 
@@ -459,6 +557,8 @@ async def api_delete_project(request):
         for sid in to_remove:
             _sessions.pop(sid, None)
     if to_remove:
+        for sid in to_remove:
+            _delete_session_file(sid)
         _signal_change()
     return JSONResponse({"ok": True})
 
@@ -739,23 +839,25 @@ async def api_cleanup(request):
 def get_prompt() -> str:
     return (
         "# Chat Workflow\n\n"
-        "chat(ai_message) is your ONLY channel to interact with the user.\n"
-        "Flow: Call chat(ai_message) → Read feedback → Execute task → Call chat(ai_message) again → Loop.\n\n"
-        "🚨 CRITICAL RULES:\n"
-        "1. NO PLAIN REPLIES: The user CANNOT see your standard text generation. You MUST use the `ai_message` parameter to convey any information.\n"
-        "2. MANDATORY CALL: After finishing ANY user task, you MUST immediately call chat(ai_message) to report back. Do not stop without calling it.\n"
-        "3. Sub-agents must NEVER call chat(ai_message).\n"
-        "4. Always use timeout=172800.\n"
-        "5. ALWAYS pass source (your IDE name, e.g. 'Windsurf', 'Cursor', 'Copilot'), project (current workspace name), and model (the AI model you are using, e.g. 'claude-3.5-sonnet', 'gpt-4o') when calling chat().\n\n"
-        "## Real-time Progress Updates\n\n"
-        "Use stream_update() to push intermediate progress to the user's Web UI BEFORE calling chat().\n"
-        "This lets the user see what you're doing in real-time instead of just 'thinking...'.\n\n"
-        "Call stream_update() when you:\n"
-        "- Start analyzing a task: stream_update(status='thinking', summary='Analyzing requirements...')\n"
-        "- Call a tool: stream_update(status='tool_call', tool_name='read_file', summary='Reading server.py')\n"
-        "- Modify a file: stream_update(status='file_change', summary='Modified ChatMode.vue', detail='added theme toggle')\n"
-        "- Make progress: stream_update(status='progress', summary='Step 2/5: Updating styles')\n\n"
-        "stream_update() returns immediately and does NOT block. Use it liberally."
+        "chat(ai_message) is your ONLY way to talk to the user. They cannot see plain text.\n"
+        "Flow: stream_update() → do work → chat() → read feedback → loop.\n\n"
+        "Rules:\n"
+        "- Always pass source, project, model to chat().\n"
+        "- Sub-agents must NEVER call chat().\n\n"
+        "## Progress Updates (REQUIRED)\n\n"
+        "You MUST call stream_update() before every significant action:\n"
+        "- Before reading/searching: stream_update(status='tool_call', summary='Reading X', tool_name='read_file')\n"
+        "- Before shell commands: stream_update(status='tool_call', summary='Running Y', tool_name='shell')\n"
+        "- When planning: stream_update(status='thinking', summary='Analyzing...')\n"
+        "- On file edits: stream_update(status='file_change', summary='Editing X')\n"
+        "Always pass source and project. This shows real-time progress in the Web UI.\n\n"
+        "## Reporting (ai_message content)\n\n"
+        "chat() ai_message MUST include: what changed, why, verification results.\n"
+        "Be detailed on substance, concise on wording.\n\n"
+        "## Trace (REQUIRED)\n\n"
+        "Pass `trace` (JSON string) to chat() with your work log.\n"
+        'Format: {"steps":[{"type":"...","content":"..."},...], "summary":"one-line"}\n'
+        "Types: thinking, read_file, shell, search, decision, file_change, verification, error\n"
     )
 
 
@@ -828,7 +930,7 @@ async def stream_update(
 
 @mcp.tool()
 async def chat(
-    ai_message: str, model: str = "", source: str = "", project: str = ""
+    ai_message: str, model: str = "", source: str = "", project: str = "", trace: str = ""
 ) -> str:
     """Chat with the user via Web UI.
 
@@ -837,6 +939,7 @@ async def chat(
         model: Your model name (REQUIRED). e.g. "claude-sonnet-4-20250514", "gpt-4o", "gemini-2.5-pro". Always identify yourself.
         source: IDE identifier, e.g. "Windsurf", "Cursor", "Copilot".
         project: Project name or path for grouping sessions.
+        trace: JSON string with structured work trace (steps taken, files read/modified, decisions made).
     """
     # Log parameters for debugging
     import logging
@@ -858,13 +961,21 @@ async def chat(
                 session = s
                 break
 
+    # Parse trace JSON if provided
+    trace_data = None
+    if trace:
+        try:
+            trace_data = json.loads(trace)
+        except (json.JSONDecodeError, TypeError):
+            trace_data = {"steps": [], "summary": trace}  # fallback: treat as plain text summary
+
     if session:
         # Check if there's an API client waiting for this response
         if session.get("_api_waiting") and ai_message:
-            trace = session.get("_api_trace")
-            if isinstance(trace, dict):
-                _trace_add_step(trace, "ai_response_captured")
-                session["_api_trace"] = trace
+            api_trace = session.get("_api_trace")
+            if isinstance(api_trace, dict):
+                _trace_add_step(api_trace, "ai_response_captured")
+                session["_api_trace"] = api_trace
             session["_api_response"] = ai_message
             session["_api_response_evt"].set()
             # Still record in history but don't show in Web UI as waiting
@@ -874,8 +985,10 @@ async def chat(
                 "ts": time.time(),
                 "model": model,
             }
-            if isinstance(trace, dict):
-                entry["trace"] = trace
+            if isinstance(api_trace, dict):
+                entry["api_trace"] = api_trace
+            if trace_data:
+                entry["trace"] = trace_data
             session["history"].append(entry)
 
         # Reuse: append AI message to existing session
@@ -886,6 +999,8 @@ async def chat(
             ai_entry = {"role": "ai", "content": ai_message, "ts": time.time(), "model": model}
             if session.get("pending_updates"):
                 ai_entry["updates"] = list(session["pending_updates"])
+            if trace_data:
+                ai_entry["trace"] = trace_data
             session["history"].append(ai_entry)
         session["pending_updates"] = []  # clear after saving to history
         session["evt"] = threading.Event()  # fresh event for this round
@@ -894,7 +1009,7 @@ async def chat(
         session["updated"] = time.time()
         if model:
             session["model"] = model
-        _signal_change()
+        _signal_change(sid)
         _broadcast_state(sid)
     else:
         # Create new session
@@ -903,9 +1018,13 @@ async def chat(
         session["phase"] = "waiting_for_user"
         session["msg_id"] = 1
         session["updated"] = time.time()
+        if trace_data:
+            # Add trace to the first history entry
+            if session["history"]:
+                session["history"][-1]["trace"] = trace_data
         with _lock:
             _sessions[sid] = session
-        _signal_change()
+        _signal_change(sid)
         _broadcast_state(sid)
 
     _ensure_ws()
@@ -939,7 +1058,7 @@ async def chat(
     session["phase"] = "idle"
     session["updated"] = time.time()
     session["user_images"] = []  # clear after pickup
-    _signal_change()
+    _signal_change(sid)
     _broadcast_state(sid)
 
     image_note = ""

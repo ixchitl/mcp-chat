@@ -10,12 +10,29 @@ import type { Settings } from '../composables/useSettings'
 let hljs: typeof import('highlight.js').default | null = null
 import('highlight.js').then(m => { hljs = m.default })
 
+interface TraceStep {
+  type: string
+  content?: string
+  file?: string
+  lines?: string
+  command?: string
+  reason?: string
+  summary?: string
+}
+
+interface TraceData {
+  steps: TraceStep[]
+  summary?: string
+}
+
 interface ChatMessage {
   role: 'ai' | 'user'
   content: string
   ts: number
   model?: string
   images?: string[]
+  trace?: TraceData
+  updates?: Array<{ status: string; summary: string; detail?: string; tool_name?: string; ts: number }>
 }
 
 const props = defineProps<{
@@ -324,6 +341,20 @@ function copyMsg(idx: number, content: string) {
   }).catch(() => {})
 }
 
+function traceIcon(type: string): string {
+  const icons: Record<string, string> = {
+    thinking: '💭',
+    read_file: '📂',
+    shell: '⚡',
+    search: '🔍',
+    decision: '💡',
+    file_change: '✏️',
+    verification: '✅',
+    error: '❌',
+  }
+  return icons[type] || '•'
+}
+
 function openLightbox(src: string) { lightboxSrc.value = src }
 function closeLightbox() { lightboxSrc.value = '' }
 function onEscKey(e: KeyboardEvent) {
@@ -378,6 +409,39 @@ onUnmounted(() => {
               <div class="text-sm font-medium text-[--text-primary]">{{ msg.model || displayName }}</div>
             </div>
             <div class="pl-11">
+              <!-- Trace: collapsible work steps -->
+              <details v-if="msg.trace && msg.trace.steps && msg.trace.steps.length" class="mb-3 group">
+                <summary class="cursor-pointer select-none text-xs text-[--text-muted] hover:text-[--text-secondary] transition-colors flex items-center gap-1.5 py-1">
+                  <span class="inline-block transition-transform group-open:rotate-90">▶</span>
+                  <span>🧠 工作流程 ({{ msg.trace.steps.length }} 步)</span>
+                  <span v-if="msg.trace.summary" class="text-[--text-dim] ml-1">— {{ msg.trace.summary }}</span>
+                </summary>
+                <div class="mt-2 ml-1 pl-3 border-l-2 border-[--border-color] space-y-1.5">
+                  <div v-for="(step, si) in msg.trace.steps" :key="si" class="text-xs text-[--text-muted] flex items-start gap-2 leading-relaxed">
+                    <span class="shrink-0 mt-0.5">{{ traceIcon(step.type) }}</span>
+                    <span>
+                      <span v-if="step.type === 'thinking'" class="text-[--text-secondary]">{{ step.content || step.summary }}</span>
+                      <span v-else-if="step.type === 'read_file'">
+                        <template v-if="step.file"><code class="text-[10px] px-1 py-0.5 rounded bg-[--inline-code-bg]">{{ step.file }}</code><span v-if="step.lines" class="text-[--text-dim]"> L{{ step.lines }}</span><span v-if="step.reason" class="text-[--text-dim]"> — {{ step.reason }}</span></template>
+                        <span v-else class="text-[--text-secondary]">{{ step.content || step.summary || step.reason }}</span>
+                      </span>
+                      <span v-else-if="step.type === 'shell'">
+                        <template v-if="step.command"><code class="text-[10px] px-1 py-0.5 rounded bg-[--inline-code-bg]">{{ step.command }}</code><span v-if="step.reason" class="text-[--text-dim]"> — {{ step.reason }}</span></template>
+                        <span v-else class="text-[--text-secondary]">{{ step.content || step.summary || step.reason }}</span>
+                      </span>
+                      <span v-else-if="step.type === 'search'"><span class="text-[--text-secondary]">{{ step.content || step.summary }}</span></span>
+                      <span v-else-if="step.type === 'decision'" class="text-[--accent]">{{ step.content || step.summary }}</span>
+                      <span v-else-if="step.type === 'file_change'">
+                        <template v-if="step.file"><code class="text-[10px] px-1 py-0.5 rounded bg-[--inline-code-bg]">{{ step.file }}</code> <span class="text-[--text-dim]">{{ step.summary || step.content }}</span></template>
+                        <span v-else class="text-[--text-secondary]">{{ step.content || step.summary || step.reason }}</span>
+                      </span>
+                      <span v-else-if="step.type === 'verification'" class="text-emerald-400">{{ step.content || step.summary }}</span>
+                      <span v-else-if="step.type === 'error'" class="text-red-400">{{ step.content || step.summary }}</span>
+                      <span v-else class="text-[--text-secondary]">{{ step.content || step.summary || step.reason }}</span>
+                    </span>
+                  </div>
+                </div>
+              </details>
               <div class="md-body" :style="{ fontSize: (settings.fontSize || 16) + 'px' }" v-html="renderMd(msg.content)" />
               <div class="flex items-center gap-1 mt-3">
                 <button @click="copyMsg(idx, msg.content)" class="h-7 px-2.5 flex items-center gap-1.5 rounded-full text-xs hover:bg-[--bg-hover] transition-colors" :class="copiedIdx === idx ? 'text-blue-400' : 'text-[--text-muted]'">
